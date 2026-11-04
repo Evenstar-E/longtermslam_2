@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.10)
+project(khronos_map_audit LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(khronos REQUIRED)
+find_package(spark_dsg REQUIRED)
+add_executable(khronos_map_audit main.cpp)
+target_link_libraries(khronos_map_audit PRIVATE khronos::khronos spark_dsg::spark_dsg)

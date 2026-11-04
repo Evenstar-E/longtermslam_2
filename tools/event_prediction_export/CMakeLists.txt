@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.10)
+project(event_prediction_export LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(khronos REQUIRED)
+add_executable(event_prediction_export main.cpp)
+target_link_libraries(event_prediction_export PRIVATE khronos::khronos)

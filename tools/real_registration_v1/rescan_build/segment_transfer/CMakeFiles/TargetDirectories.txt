@@ -1,0 +1,3 @@
+/mnt/c/Users/仝正睿/Documents/paper/vlm&lifelongslam/tools/real_registration_v1/rescan_build/segment_transfer/CMakeFiles/rebuild_cache.dir
+/mnt/c/Users/仝正睿/Documents/paper/vlm&lifelongslam/tools/real_registration_v1/rescan_build/segment_transfer/CMakeFiles/edit_cache.dir
+/mnt/c/Users/仝正睿/Documents/paper/vlm&lifelongslam/tools/real_registration_v1/rescan_build/segment_transfer/CMakeFiles/segment_transfer.dir

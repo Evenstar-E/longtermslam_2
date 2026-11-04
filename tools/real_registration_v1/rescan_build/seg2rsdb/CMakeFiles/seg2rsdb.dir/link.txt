@@ -1,0 +1,1 @@
+/usr/bin/c++  -O3 -DNDEBUG  -rdynamic CMakeFiles/seg2rsdb.dir/main.cpp.o  -o "/mnt/c/Users/仝正睿/Documents/paper/vlm&lifelongslam/third_party/Rescan/bin/seg2rsdb" 

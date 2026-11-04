@@ -1,0 +1,11 @@
+.venv*/
+.cache/
+__pycache__/
+data/
+results/
+*.bag
+*.mcap
+*.mp4
+*.pth
+*.pt
+.env*

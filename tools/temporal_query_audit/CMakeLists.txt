@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.10)
+project(temporal_query_audit LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(catkin REQUIRED COMPONENTS khronos_eval)
+find_package(khronos REQUIRED)
+add_executable(temporal_query_audit main.cpp)
+target_include_directories(temporal_query_audit PRIVATE ${catkin_INCLUDE_DIRS})
+target_link_libraries(temporal_query_audit PRIVATE ${catkin_LIBRARIES} khronos::khronos)

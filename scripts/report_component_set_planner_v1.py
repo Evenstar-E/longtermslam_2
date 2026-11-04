@@ -1,0 +1,181 @@
+"""Generate complete, unfiltered method/condition report and research figure."""
+from pathlib import Path
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scripts.run_evidence_value_pilot_v1 import read,save,digest
+from inspection_decisions.graph_dataset import read_graph
+from comparative_evidence.evaluation_v3 import evaluate
+
+
+def main():
+    out=Path('results/component_set_planner_v1');a=read(out/'analysis.json');f=read(out/'frozen_training.json')
+    cfg=read('configs/component_set_planner_v1.json');methods=cfg['methods'];labels=['Set rank','Set MSE','Additive rank','Pooled rank','Coverage replan','Coverage commit']
+    no_stop=read(out/'posthoc_no_stop/analysis.json')
+    colors=['#0072B2','#777777','#777777','#777777','#009E73','#CC79A7']
+    with plt.rc_context({'font.size':10,'axes.spines.top':False,'axes.spines.right':False}):
+        fig,axes=plt.subplots(2,2,figsize=(13,9),layout='constrained')
+        for row,cond in enumerate(('control','shift')):
+            for col,(key,title) in enumerate((('task_loss','Total report loss'),('mean_travel_m','Mean travel including return (m)'))):
+                ax=axes[row,col];values=[a['summaries'][cond][m][key] for m in methods]
+                ax.barh(range(6),values,color=colors);ax.invert_yaxis();ax.set_yticks(range(6),labels)
+                ax.set_xlim(0,max(max(values)*1.18,1));ax.set_title(f'{cond.capitalize()} (16 fresh families): {title}',loc='left')
+                for i,v in enumerate(values):ax.text(v+max(max(values)*.015,.01),i,f'{v:.2f}',va='center')
+        fig.suptitle('Component-set decision learning: actual closed-loop acquisition / refit / return\nAll six methods; frozen models; zero scene exclusions',fontsize=13)
+        fig.savefig(out/'comparison.png',dpi=180);fig.savefig(out/'comparison.svg');plt.close(fig)
+        fig,ax=plt.subplots(figsize=(10,4),layout='constrained')
+        for cond,color in (('control','#0072B2'),('shift','#D55E00')):
+            r=a['contrasts'][cond]['coverage_replan'];cases=r['cases']
+            ax.scatter([r['scene'] for r in cases],[r['objective_difference'] for r in cases],color=color,label=cond,marker='o' if cond=='control' else 's')
+        ax.axhline(0,color='black',lw=1);ax.set(xlabel='Fresh scene family ID',ylabel='Set rank minus coverage-replan objective',title='Every family retained; negative favors learned set rank')
+        ax.legend();fig.savefig(out/'family_differences.png',dpi=180);fig.savefig(out/'family_differences.svg');plt.close(fig)
+    tables=[]
+    for cond,title in (('control','新原分布对照'),('shift','新遮挡迁移'),('all','全部32家族')):
+        table=[f'### {title}','', '|方法|正确量化|误报|错误位移|未知|报告损失|平均采集|平均返航路程m|', '|---|---:|---:|---:|---:|---:|---:|---:|']
+        for m in methods:
+            r=a['summaries'][cond][m]
+            table.append(f"|{m}|{r['qualified_tp']}/{r['changed']}|{r['fp']}|{r['bad_motion_reports']}|{r['unknown']}|{r['task_loss']:.2f}|{r['mean_acquisitions']:.3f}|{r['mean_travel_m']:.2f}|")
+        tables.append('\n'.join(table))
+    contrasts=[]
+    for cond in ('control','shift','all'):
+        for m,r in a['contrasts'][cond].items():
+            lo,hi=r['objective_ci95'];contrasts.append(f"|{cond}|{m}|{r['mean_objective_difference']:+.4f}|[{lo:+.4f},{hi:+.4f}]|{r['wins']}/{r['ties']}/{r['losses']}|")
+    extrap=[]
+    for m in methods:
+        r=a['summaries']['all'][m];v=r['mean_out_of_train_range_feature_fraction'];v='—' if v is None else f'{v:.1%}'
+        extrap.append(f"|{m}|{r['beyond_training_prefix_states']}/{r['total_decision_states']}|{v}|{r['mean_backend_s']:.3f}|{r['mean_actor_including_graph_s']:.3f}|")
+    s=a['summaries']['all'];cand=s['set_rank'];cover=s['coverage_replan'];commit=s['coverage_commit'];mse=s['set_mse'];add=s['additive_rank']
+    example_rows=[];example_data=[]
+    # Illustrative fixed IDs: first control and first changed shifted family.
+    # These are not selected by gain and are not an extra statistical test.
+    for sid in (0,17):
+        shard=out/f'shard_{sid%2}';ep=read(shard/'episodes'/f'{sid:04d}_set_rank.json')
+        for stage,decision in enumerate(ep['trajectory']):
+            snap=read_graph(shard/'snapshots'/f'{sid:04d}_set_rank_{stage}.json.gz')
+            metric=evaluate(shard/'scenes'/f'{sid:04d}',snap['prediction'])
+            option=decision['selected_option'];action='STOP' if not option else str(option[0])
+            example_rows.append(f"|{sid}|{stage}|{action}|{metric['task_loss']:.2f}|{metric['qualified_tp']}|{metric['fp']}|{8-metric['known']}|")
+            example_data.append(dict(scene=sid,stage=stage,decision=decision,posthoc_metric=metric))
+    save(out/'illustrative_prefixes.json',dict(note='Posthoc evaluator only after completed frozen policies; not actor input',rows=example_data))
+    text=f'''# 构件集合价值与遗憾排序：主线算法及真实闭环实验
+
+## Material Passport
+
+2026-10-23。Verification Status: VERIFIED（输入/动作/实际终点与完整首场景闭环重放）。本报告是开发后的前瞻新seed与遮挡压力检验，不是实机或完整论文创新确认。
+
+## 本轮具体推进
+
+已实现并训练新的构件级集合价值表示与任务遗憾加权排序器，接入真实“读取历史/移动观察—重新估计—重新选动作—停止返航”循环。完成{a['episodes']}条全流程主策略、{a['new_backend_fits']}次新的后端拟合、32个新家族的768帧新RGB-D。另有32条事后禁止STOP续行诊断，复用已核对载荷的冻结前缀后新增{no_stop['new_backend_fits']}次拟合；不是32个新增独立场景。核查另执行新场景0重放{a['extra_audit_replay_fits']}次拟合、一次日志比较失败前已执行{a['failed_audit_replay_fits']}次，以及冻结前旧场景接口试跑2次。
+
+全部32家族候选正确量化{cand['qualified_tp']}/{cand['changed']}、误报{cand['fp']}、报告损失{cand['task_loss']:.2f}；同接口覆盖率重规划为{cover['qualified_tp']}/{cover['changed']}、误报{cover['fp']}、损失{cover['task_loss']:.2f}；原强覆盖率提交组合为{commit['qualified_tp']}/{commit['changed']}、误报{commit['fp']}、损失{commit['task_loss']:.2f}。所有方法和条件结果如下，不挑选赢家替换预先指定候选。
+
+## 为什么改算法
+
+上一版427维输入在动作相关构件层面多用均值/方差，未显式保留逐构件集合补足关系；覆盖率基线却保留逐构件最大值。代码检查揭示的是表示能力差异，不是已经证明失败的唯一原因。本轮新增可检验机制：先在同一匿名构件上聚合候选动作，再跨构件共享权重汇总，避免不同构件的补足与同一构件重复补足混为一谈。
+
+设j为估计得到的匿名构件，P_j为其已取得的片段：
+
+    c(a,j) = max_[p in P_j, p与a跨期] (frustum_fraction(a,p) * missing_support(a,p))
+    U(S,j) = 1 - product_[a in S] (1-c(a,j))
+    M(S,j) = max_[a in S] c(a,j)
+    A(S,j) = sum_[a in S] c(a,j)
+    H(S,j) = max_[a为历史动作] c(a,j)
+    C(S,j) = max_[a为当前动作] c(a,j)
+
+c只来自已见片段的名义视锥和支持缺口，未来遮挡未知。U是饱和组合代理，不是真实概率。用[U,M,A,U-M,H*C,A-U]与构件属性z_j交叉后平均：z_j包含常数、声明风险、未知/变化报告状态、位移标准差范数、匹配间隔变换、当前支持。再加入采集类型/估计费用等7维，共49维。STOP特征严格为0。原始协方差块不再被作为本轮核心贡献；节点位移标准差仍保留，不是去掉全部不确定性。
+
+    score(S) = w^T phi(S) - lambda * |S|, lambda=0.05
+    target_gain(S) = L(current_state) - L(after_actual_S)
+
+同一状态内按净收益差的符号监督排序，并以差的绝对值加权logistic损失，加L2正则。每个状态的成对权重归一化，家族状态数相同，家族等权。排序分数不是经校准的损失期望/错误概率；STOP作为真实标注选项参与训练。这个目标直接惩罚有后果的动作顺序错误，仍是通用排序思想的任务化实现。
+
+同表示set_mse检验排序目标；additive_rank以单动作特征相加，检验显式集合互补；pooled_rank使用旧427维信息汇总但相同线性排序目标，且减去STOP特征作锚定，因此状态内常量通道被抵消。它不是上一轮的非线性RBF模型，也不能代表所有通用图网络；其失败只约束当前表示与线性排序组合。两种覆盖率参照保留。所有模型接收同一已见图、同一后端/预算及合法菜单；不是原始输入权限差异。它们的归纳偏置与特征维度不同，不能称相同容量的完整神经网络比较。
+
+## 训练及冻结
+
+训练与校准各16家族，均为96个有已知后果的观测状态、704个选项。包含初始31选项，以及5个首动作后状态的STOP和已实际执行的第二动作。未采集的第二动作后果不补零；校准局部菜单也只含有标签选项，这是离线数据覆盖限制。
+
+四模型各4个正则，共16配置；校准按实际报告损失加固定采集费用选择，同分选择更大正则。优化均收敛；保存models.json和源哈希后才生成32新场景。旧16开发家族未参与本轮训练/选择。训练用原始混合标签文件按允许state_id筛选；这些旧标签此前已审计过，不能把整个项目历史称为盲测。
+
+## 实际闭环与迁移
+
+预算4历史（含H0）、2新增当前（不含免费C0），最多5次新增采集。每轮候选菜单为STOP、全部合法单动作和原定8组合中仍合法且联合可负担的组合。学习方法与coverage_replan只执行所选组合第一动作，获取后重新拟合和规划；这不等于已求解精确两步期望规划。coverage_commit提交初始组合后停止，保留上一轮强基线的真实运行方式。
+
+新seed22342026..22342057，前16原分布、后16遮挡压力，每侧完整16因素单元。遮挡板横向中心[-1.2,0,1.2]m、宽度[0.7,1.1,1.5]m、深度中心[2.8,3.4]m按seed固定采样，高4.4m、厚0.35m。改变实际RGB-D渲染；重新核验包含新遮挡几何的真实及名义轨迹包围半径。选择不依赖任何策略结果。此变化模拟临时遮挡机制，尚非实测工程分布；没有任意SE(3)构件运动、自然纹理或真正飞控。
+
+## 全部结果
+
+'''+ '\n\n'.join(tables)+'''
+
+![全部方法及两条件](../results/component_set_planner_v1/comparison.png)
+
+任务损失沿用冻结报告判定，未知、错误归属、误报和位移错误均计入。费用包含实际返航；模型看到的未来费用仅名义/已读载荷代理。CPU是本机仿真测得，非无人机飞行总时延；两个分片并发，不以这些时间宣称速度优势。
+
+## 两条实际闭环说明
+
+下表展示场景0及场景17的候选轨迹。损失列是完成策略后由评价器计算的当前前缀损失，策略当时只看到观测与估计，未看到这些真值。动作列是该前缀决定接下来实际执行的第一动作，选了组合也只先执行第一动作。
+
+|场景|已新增采集步数|下一实际动作|当前前缀损失|正确量化数|误报|未知|
+|---|---:|---|---:|---:|---:|---:|
+'''+ '\n'.join(example_rows)+'''
+
+这些例子只解释运行机制，不用单一轨迹替代全体结果。算法改动位于主动感知/规划中的证据价值与动作选择，RGB-D检测、配准后端和低层飞控均未改变。
+
+## 配对探索比较
+
+候选set_rank减各参照，负数有利于候选。主目标为每家族报告损失＋0.05×新增采集数。每条件16家族自助5000次；总体按两条件分层重采样。区间未做多重比较确证，个别因素单元仍只有一个家族。
+
+相对覆盖率重规划，候选平均少采集2.406次（探索区间[-3.031,-1.781]）、路程少5.921m（[-7.508,-4.327]），但每家族报告损失多0.100（[0.0219,0.1969]）。综合目标差为-0.0203，区间[-0.0953,0.0734]包含0。这是观察到的质量—资源权衡，不能称质量不降的效率提升。
+
+|条件|参照|平均差|探索95%区间|候选赢/平/输|
+|---|---|---:|---:|---:|
+'''+ '\n'.join(contrasts)+'''
+
+![逐家族损失差](../results/component_set_planner_v1/family_differences.png)
+
+## 事后机制消融：固定动作打分，只禁止提前停止
+
+主实验完成后先写独立诊断契约，再对全部32家族实施同一干预：载入候选停止时的已见状态与冻结打分器，忽略STOP选项，保持原动作排序直到预算耗尽。历史前缀通过相同载荷摘要核对后复用，每个新增观测仍重新拟合。不重训、不改变阈值、不筛选错误场景，且不替换主结果。
+
+|版本|正确量化|误报|错误位移|未知|总损失|平均采集|平均返航路程m|
+|---|---:|---:|---:|---:|---:|---:|---:|
+|原候选|46/48|1|1|5|3.55|2.594|8.85|
+|同打分器禁止STOP（事后）|47/48|0|0|2|0.70|5.000|14.54|
+|主实验覆盖率重规划|47/48|0|0|1|0.35|5.000|14.77|
+
+5个家族报告损失下降、27个相同、0个上升。这个固定数据/环境内干预支持“提前停止造成了本批候选的一部分质量损失”，但不是期望信息价值单调性定理，也不证明所有后续观察都有益。禁止停止后资源优势消失，剩余未知构件仍比覆盖率多1个，因此不能只保留质量改善来宣传新算法。
+
+下一项主线算法已有明确靶点：保留当前构件集合动作排序器，分离“继续选哪个动作”与“当前报告是否已足够可靠”的停止风险估计，检验带报告风险约束的停止决策。必须加入同校准数据的普通风险阈值停止、固定预算和当前冻结停止规则；不能把简单加阈值当论文创新，也不能使用本32家族选择新阈值。
+
+## 训练外状态与计算
+
+训练最多首动作后的状态。第2次及以后新增采集后的决策状态是此前缀覆盖范围外；数值越界比例只是相对训练特征逐维min/max的诊断，不是统计OOD检测器，也不是安全保证。
+
+|方法|训练前缀范围外状态/全部决策状态|平均越界特征比例|每任务后端秒|每任务构图及决策秒|
+|---|---:|---:|---:|---:|
+'''+ '\n'.join(extrap)+f'''
+
+## 主线、问题与创新收益审查
+
+- 主线推进：由一次提交式价值预测推进到带真实获取/估计更新的主动证据闭环，并实际训练、测试构件集合表示和任务排序。不是再次证明普通配准可行。
+- 工程部分：接口、快照、资源核算、合法组合过滤、遮挡路径重验、模型保存重放；这些不是原创贡献。4项针对性单测在冻结前全通过；其中合成单测验证集合表示可以区分“不同构件补足”与“重复补足同一构件”，但该单测不证明实际任务收益。
+- 可检验算法部分：候选总损失{cand['task_loss']:.2f}，同表示MSE为{mse['task_loss']:.2f}，加和排序为{add['task_loss']:.2f}；需结合上面的强覆盖率、错误报告和配对区间解释，不能只报告某一局部胜利。
+- 创新边界：集合置换不变表示与排序优化均已有成熟研究；本原型不能仅凭组合它们宣称原创。[Deep Sets原文](https://arxiv.org/abs/1703.06114)、[Microsoft Research排序综述](https://www.microsoft.com/en-us/research/publication/from-ranknet-to-lambdarank-to-lambdamart-an-overview/)。实现是49维确定性集合特征＋线性排序器，不是训练的DeepSets或LambdaMART。
+- 尚存问题：已见面代理不能预测新遮挡；硬估计身份可能污染集合关系；部分后续状态超出训练前缀；这几项分别涉及感知/推断、表示与策略泛化，不能看到负结果就归罪于工程或无限修后端。
+- 下一步边界：冻结结果，针对上述停止风险作单一算法修改，不调本批场景、费用或测试阈值。当前与最强覆盖率重规划的综合目标差区间仍含0，报告损失更高；资源节省存在，质量非劣尚未建立。若优势仅来自普通覆盖或既有排序组件，应收缩“原创机制”主张，而不是把工程工作改名为创新。
+
+## 验证与可复现产物
+
+{a['checks']}项来源/新场景/快照/动作/预算/返航/结果/重训检查通过；全部192轨迹的每步决策重放一致；4最终模型重训完全一致；预定新场景0候选实际获取及后端全重放一致。0排除，旧模型和后端冻结源未改动。首次重放核查因内存元组与JSON列表直接比较而误报不一致，核查脚本改用规范化JSON比较后通过，失败记录保留在audit_first_attempt_failure.json；未修改模型或策略。该项仅为核查工程修复。
+
+代码：inspection_decisions/component_set_v1.py、component_set_episode_v1.py。配置：configs/component_set_planner_v1.json。入口：python -m scripts.run_component_set_planner_v1 train；run --shard 0 --shards 2及shard1；输出拒绝覆盖。核查：python -m unittest tests.test_component_set_planner_v1 -v；python -m scripts.analyze_component_set_planner_v1（分析存在则拒绝覆盖）。数据与全部分组汇总：results/component_set_planner_v1/summary.csv、analysis.json、各shard的scenes/episodes/snapshots。
+'''
+    report=Path('research/component_set_planner_v1_2026-10-23.md');report.write_text(text,encoding='utf-8')
+    save(out/'figure_manifest.json',dict(source_sha256=digest(out/'analysis.json'),script_sha256=digest(__file__),
+         outputs={p.name:digest(p) for p in out.glob('*.png')},all_methods=True,all_conditions=True,
+         no_exclusions=True,figure_scope='internal research; no journal compliance claim',raw_family_plot=True))
+    print(report)
+
+
+if __name__=='__main__':main()
